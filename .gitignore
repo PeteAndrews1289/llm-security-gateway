@@ -1,0 +1,17 @@
+# Security: Environment Variables & API Keys
+.env
+.env.*
+
+# Python Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+
+# Serverless/AWS Artifacts
+.serverless/
+.aws-sam/
+
+# OS Artifacts
+.DS_Store
