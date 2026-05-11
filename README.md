@@ -11,6 +11,43 @@ This project was built entirely through Infrastructure as Code (Terraform) and f
   * Extracting hardcoded application secrets.
   * API infrastructure abuse (Cost exhaustion).
 
+ ```mermaid
+graph TD
+    %% Define Styles
+    classDef aws fill:#FF9900,stroke:#232F3E,stroke-width:2px,color:black;
+    classDef security fill:#E71D36,stroke:#232F3E,stroke-width:2px,color:white;
+    classDef safe fill:#2EC4B6,stroke:#232F3E,stroke-width:2px,color:black;
+    classDef external fill:#F2F2F2,stroke:#000000,stroke-width:2px,color:black;
+
+    %% Nodes
+    User((End User)):::external
+    APIGW["AWS API Gateway<br/>(Phase 5: Rate Limiter)"]:::aws
+    LambdaIn{"AWS Lambda<br/>(Phase 3: Input Scanner)"}:::security
+    OpenAI(("OpenAI API<br/>(LLM)")):::external
+    LambdaOut{"AWS Lambda<br/>(Phase 4: DLP Filter)"}:::security
+    
+    %% Attack/Fail Paths
+    DoW["Drop Traffic<br/>(HTTP 429)"]:::security
+    Block["Drop Payload<br/>(HTTP 403)"]:::security
+    Redact["Sanitize Data<br/>[REDACTED]"]:::safe
+    Success["Clean Output<br/>(HTTP 200)"]:::safe
+
+    %% Routing
+    User -->|POST /chat| APIGW
+    APIGW -.->|Burst Exceeded| DoW
+    APIGW -->|Traffic Allowed| LambdaIn
+    
+    LambdaIn -.->|Prompt Injection| Block
+    LambdaIn -->|Clean Prompt| OpenAI
+    
+    OpenAI -->|Raw Response| LambdaOut
+    
+    LambdaOut -.->|Data Leak Detected| Redact
+    LambdaOut -->|Clean Response| Success
+
+    Redact --> User
+    Success --> User
+```
 ---
 
 ## 🧱 Phase 1: The Vulnerable Foundation (Direct LLM Access)
