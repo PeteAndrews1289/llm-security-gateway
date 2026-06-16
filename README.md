@@ -102,22 +102,19 @@ The baseline testing showed that a direct LLM integration could be manipulated i
 
 The project also produced practical cloud engineering findings. Lambda packaging required Linux-compatible dependencies, and synchronous LLM calls needed a longer Lambda timeout than the initial configuration. API Gateway throttling also required careful route-level configuration and time for enforcement to become consistent.
 
-## Screenshots
+## Evidence / Artifacts
 
-Existing screenshots in this repository:
+Existing evidence in this repository:
 
 - `docs/screenshots/llm-baseline-defense.png`
 - `docs/screenshots/llm-pure-extraction-success.png`
 - `docs/screenshots/serverless-proxy-success.png`
 - `docs/screenshots/403-forbidden-llm.png`
 - `docs/screenshots/dlp-redaction-success.png`
-
-Suggested additional screenshots:
-
-- `docs/screenshots/api-gateway-throttling.png`
-- `docs/screenshots/lambda-cloudwatch-security-logs.png`
-- `docs/screenshots/terraform-apply-success.png`
-- `docs/screenshots/architecture.png`
+- `docs/security-test-plan.md`
+- `vulnerable_app/vulnerable_app.py`
+- `lambda_firewall/lambda_function.py`
+- `api_gateway/main.tf`
 
 ## Challenges & Lessons Learned
 
