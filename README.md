@@ -1,126 +1,145 @@
-# 🛡️ AWS LLM Security Gateway & Prompt Injection Firewall
+# AWS LLM Security Gateway and Prompt Injection Firewall
 
-## 📖 Overview
-An AWS serverless architecture designed to act as a secure proxy between end-users and Large Language Models (LLMs). This project implements "Defense in Depth" against the OWASP Top 10 for LLMs, specifically targeting Prompt Injection (LLM01) and Sensitive Information Disclosure (LLM06). 
+## Overview
 
-This project was built entirely through Infrastructure as Code (Terraform) and features custom Python security routing to sanitize inputs, redact sensitive data, and throttle traffic to prevent Denial of Wallet (DoW) attacks.
+This project demonstrates a serverless security gateway for Large Language Model applications. It addresses a growing AI security problem: applications that send user input directly to an LLM can be vulnerable to prompt injection, secret extraction, data leakage, and cost-abuse scenarios.
 
-## 🏗️ Architecture & Threat Model
-* **User Request** $\rightarrow$ **AWS API Gateway** (Rate Limiter / DoW Defense) $\rightarrow$ **AWS Lambda** (Python Input Firewall & Output DLP) $\rightarrow$ **OpenAI API**
-* **Threat Model Focus:** * Bypassing native LLM alignment via contextual roleplay.
-  * Extracting hardcoded application secrets.
-  * API infrastructure abuse (Cost exhaustion).
+The lab starts with an intentionally vulnerable direct-to-LLM Python script that relies on the model to protect a mock internal secret. It then moves the LLM interaction behind AWS API Gateway and Lambda so input inspection, output redaction, and rate limiting can be enforced before responses reach the user.
 
- ```mermaid
-graph TD
-    %% Define Styles
-    classDef aws fill:#FF9900,stroke:#232F3E,stroke-width:2px,color:black;
-    classDef security fill:#E71D36,stroke:#232F3E,stroke-width:2px,color:white;
-    classDef safe fill:#2EC4B6,stroke:#232F3E,stroke-width:2px,color:black;
-    classDef external fill:#F2F2F2,stroke:#000000,stroke-width:2px,color:black;
+The final system demonstrates defense-in-depth for LLM applications: an API gateway chokepoint, a Lambda-based input scanner, an outbound DLP filter, Terraform-managed infrastructure, and API Gateway throttling for denial-of-wallet protection.
 
-    %% Nodes
-    User((End User)):::external
-    APIGW["AWS API Gateway<br/>(Phase 5: Rate Limiter)"]:::aws
-    LambdaIn{"AWS Lambda<br/>(Phase 3: Input Scanner)"}:::security
-    OpenAI(("OpenAI API<br/>(LLM)")):::external
-    LambdaOut{"AWS Lambda<br/>(Phase 4: DLP Filter)"}:::security
-    
-    %% Attack/Fail Paths
-    DoW["Drop Traffic<br/>(HTTP 429)"]:::security
-    Block["Drop Payload<br/>(HTTP 403)"]:::security
-    Redact["Sanitize Data<br/>[REDACTED]"]:::safe
-    Success["Clean Output<br/>(HTTP 200)"]:::safe
+## Key Features
 
-    %% Routing
-    User -->|POST /chat| APIGW
-    APIGW -.->|Burst Exceeded| DoW
-    APIGW -->|Traffic Allowed| LambdaIn
-    
-    LambdaIn -.->|Prompt Injection| Block
-    LambdaIn -->|Clean Prompt| OpenAI
-    
-    OpenAI -->|Raw Response| LambdaOut
-    
-    LambdaOut -.->|Data Leak Detected| Redact
-    LambdaOut -->|Clean Response| Success
+- Built an intentionally vulnerable baseline LLM client to test prompt injection.
+- Demonstrated contextual roleplay prompt injection against a mock internal secret.
+- Deployed a serverless proxy using AWS API Gateway and AWS Lambda.
+- Provisioned infrastructure with Terraform.
+- Implemented a Lambda input scanner for prompt injection keywords and regex patterns.
+- Implemented an output DLP filter to redact known sensitive strings and matching patterns.
+- Added API Gateway route throttling to reduce cost-abuse risk.
+- Packaged Python dependencies for Lambda and documented deployment troubleshooting.
+- Included screenshots showing baseline testing, extraction, proxy success, input blocking, and DLP redaction.
 
-    Redact --> User
+## Architecture
+
+Users send prompts to API Gateway instead of directly calling the LLM provider. API Gateway applies throttling, then forwards allowed requests to Lambda. Lambda blocks suspicious prompts, sends clean prompts to the OpenAI API, scans the response for sensitive data, and returns either a sanitized response or a security error.
+
+```mermaid
+flowchart LR
+    User[User] -->|POST /chat| APIGW[AWS API Gateway]
+    APIGW -->|Allowed Request| Lambda[AWS Lambda Security Gateway]
+    APIGW -->|Throttled| RateLimit[HTTP 429]
+    Lambda -->|Prompt Injection Detected| Block[HTTP 403]
+    Lambda -->|Clean Prompt| LLM[OpenAI API]
+    LLM --> Raw[Raw LLM Response]
+    Raw --> DLP[Output DLP Filter]
+    DLP -->|Sensitive Data Found| Redacted[Redacted Response]
+    DLP -->|Clean| Success[Clean Response]
+    Redacted --> User
     Success --> User
 ```
----
 
-## 🧱 Phase 1: The Vulnerable Foundation (Direct LLM Access)
-Before building a firewall, I established a baseline by writing a raw Python script that connected directly to OpenAI (`gpt-3.5-turbo`). The LLM was given a system prompt instructing it to protect a mock internal database password (`FitPlate_DB_P@ssw0rd_2026`).
+## Tools & Technologies
 
-**The Attack:** Basic prompt injections ("Ignore previous instructions") were successfully blocked by OpenAI's native guardrails. 
-**The Bypass:** I pivoted to a contextual roleplay bypass, instructing the LLM to write a fictional story about a sloppy developer writing a Python script. The semantic shift bypassed the safety filters and resulted in a pure extraction of the secret.
+### Cloud / Infrastructure
 
-![Baseline Defense](docs/screenshots/llm-baseline-defense.png)
-*Initial baseline guardrails holding against basic attacks.*
+- AWS API Gateway
+- AWS Lambda
+- IAM execution roles
+- CloudWatch Lambda logging
+- Terraform
 
-![Prompt Injection Success](docs/screenshots/llm-pure-extraction-success.png)
-*Successful pure extraction via contextual roleplay bypass.*
+### Security Tools
 
----
+- Prompt injection testing
+- Input filtering
+- Output DLP redaction
+- API Gateway throttling
+- OWASP Top 10 for LLM Applications concepts
 
-## ☁️ Phase 2: The Serverless Proxy (AWS Infrastructure)
-To create a chokepoint for security inspection, I moved the application into the cloud using AWS API Gateway and AWS Lambda, provisioned entirely via Terraform.
+### Programming / Scripting
 
-### 🚧 Engineering Struggle: The "Apple Silicon" Trap
-**The Failure:** Upon initial Terraform deployment, hitting the API Gateway returned a hard `500 Internal Server Error`.
-**The Diagnosis:** By utilizing AWS CLI direct Lambda invocation, I bypassed the API Gateway and discovered an `exec format error`. I was developing on an M-series Mac (ARM64), and `pip` packaged Mac binaries for `pydantic-core`. When deployed to AWS Lambda (Linux x86_64), the container instantly crashed.
-**The Fix:** Executed a strict cross-platform compilation script to force pure-Linux binary packaging (`--platform manylinux2014_x86_64`).
+- Python
+- Regular expressions
+- OpenAI API client
+- Terraform HCL
 
-### 🚧 Engineering Struggle: Dependency Whack-a-Mole
-**The Failure:** After fixing the architecture, the Lambda function threw an `ImportModuleError`.
-**The Diagnosis:** The strict Linux compilation flag aggressively dropped pure-Python sub-dependencies (like `exceptiongroup`). 
-**The Fix:** Used direct AWS CLI invocation logs to surgically identify and manually patch the missing dependencies into the deployment ZIP, resulting in a successful `200 OK` route.
+### Monitoring / Logging
 
-![Serverless Proxy Success](docs/screenshots/serverless-proxy-success.png)
-*Successful traffic routing through the AWS chokepoint.*
+- Lambda execution logs
+- API Gateway responses
+- Screenshot-based validation
 
----
+### Automation / CI/CD
 
-## 🛡️ Phase 3: The Input Firewall (Prompt Injection Defense)
-With the proxy established, I engineered a Python heuristic scanner inside the Lambda function to inspect incoming prompts before passing them to the OpenAI API. The firewall utilizes a blacklist of classic adversarial keywords and Regex pattern matching to catch spacing obfuscations. 
+- Terraform-based deployment
+- No CI/CD pipeline is included in this repository
 
-### 🚧 Engineering Struggle: The LLM Latency Trap
-**The Failure:** While malicious payloads were instantly dropped, benign prompts (which require the LLM to generate long paragraphs) resulted in a `Sandbox.Timedout` error.
-**The Diagnosis:** The default Terraform Lambda timeout was set to 15 seconds. OpenAI's response generation took ~18 seconds.
-**The Fix:** Expanded the IaC Lambda timeout limit to 30 seconds to accommodate heavy token generation while keeping the Gateway synchronous.
+## Security Concepts Demonstrated
 
-![Input Firewall Success](docs/screenshots/403-forbidden-llm.png)
-*Custom heuristic scanner intercepting and dropping malicious payloads.*
+This project demonstrates LLM security, prompt injection testing, output filtering, data loss prevention, serverless security, infrastructure as code, and denial-of-wallet mitigation.
 
----
+The baseline test shows why relying only on model instructions is not enough. A prompt can shift context and attempt to extract sensitive information from the system prompt. The gateway design adds external controls that do not depend solely on model behavior.
 
-## 🕵️‍♂️ Phase 4: The Output Filter (Data Loss Prevention)
-To account for "Zero-Day" prompt injection techniques that might bypass the Phase 3 Input Firewall, I implemented an outbound Data Loss Prevention (DLP) safety net. 
+The Lambda security layer demonstrates a simple defense-in-depth pattern: inspect input before the model call, redact sensitive output after the model call, and throttle traffic at the API boundary.
 
-If an attacker successfully tricks the LLM into revealing the secret, the Lambda function intercepts the outgoing HTTP payload, utilizes Regex to scan for the known string (and PII variants), and dynamically sanitizes the payload before it leaves the AWS environment.
+## Implementation Steps
 
-![DLP Redaction Success](docs/screenshots/dlp-redaction-success.png)
-*Output filter catching a successful LLM exploit and redacting the payload in transit.*
+1. Built a direct Python LLM client with a mock secret in the system prompt.
+2. Tested basic prompt injection and contextual roleplay bypasses.
+3. Created Terraform infrastructure for Lambda, IAM, and API Gateway.
+4. Packaged Python dependencies for AWS Lambda.
+5. Deployed the Lambda-based LLM proxy.
+6. Added an input firewall for suspicious prompt injection phrases and patterns.
+7. Added an output DLP filter for known secret strings and related regex patterns.
+8. Increased Lambda timeout to support slower LLM responses.
+9. Added API Gateway throttling for cost-abuse protection.
+10. Validated the system with screenshots for baseline, blocked input, successful proxy routing, and DLP redaction.
 
----
+## Results / Findings
 
-## 🚦 Phase 5: Operational Security (Denial of Wallet Protection)
-To protect the underlying infrastructure and OpenAI API credits from cost exhaustion attacks, I implemented strict Rate Limiting via Terraform. 
+The baseline testing showed that a direct LLM integration could be manipulated into revealing a mock secret through contextual prompt injection. After the security gateway was added, known malicious prompts were blocked before reaching the model, and sensitive output was redacted before returning to the user.
 
-### 🚧 Engineering Struggle: Cloud Eventual Consistency
-**The Failure:** During a bash `for` loop burst test, all 10 concurrent requests returned `200 OK`, completely ignoring the newly deployed rate limit.
-**The Diagnosis:** AWS API Gateway utilizes globally distributed edge nodes. It took ~60 seconds for the Token Bucket algorithms to synchronize the new rules. Furthermore, I discovered the `auto_deploy` Terraform quirk ignores stage setting updates.
-**The Fix:** Enforced a surgical hard-throttle on the specific `POST /chat` route and forced a Terraform stage replacement.
+The project also produced practical cloud engineering findings. Lambda packaging required Linux-compatible dependencies, and synchronous LLM calls needed a longer Lambda timeout than the initial configuration. API Gateway throttling also required careful route-level configuration and time for enforcement to become consistent.
 
-### 🚧 Engineering Struggle: The AWS Sandbox Quota
-**The Failure:** To combat the edge-node lag, I attempted to enforce a "Vault Lock" by setting a hard concurrency limit of `1` directly on the Lambda compute layer. Terraform failed with an `InvalidParameterValueException`.
-**The Diagnosis:** I hit an AWS account quota. New/Sandbox AWS accounts enforce a minimum unreserved concurrency pool of 10. Reserving 1 execution dropped the pool below the strict AWS safety limit. 
-**The Fix:** Reverted the compute layer restriction and relied on the API Gateway edge-node throttling, allowing the token buckets to synchronize. 
+## Screenshots
 
----
+Existing screenshots in this repository:
 
-## 🧠 Core Competencies Demonstrated
-* **AI Security:** Prompt Injection Mitigation, LLM Jailbreak Analysis, OWASP Top 10 for LLMs.
-* **DevSecOps / AppSec:** Data Loss Prevention (DLP), Input Sanitization, Regex Pattern Matching.
-* **Cloud Engineering:** Immutable Infrastructure (Terraform IaC), AWS Lambda packaging, API Gateway Routing, AWS CLI debugging.
+- `docs/screenshots/llm-baseline-defense.png`
+- `docs/screenshots/llm-pure-extraction-success.png`
+- `docs/screenshots/serverless-proxy-success.png`
+- `docs/screenshots/403-forbidden-llm.png`
+- `docs/screenshots/dlp-redaction-success.png`
+
+Suggested additional screenshots:
+
+- `docs/screenshots/api-gateway-throttling.png`
+- `docs/screenshots/lambda-cloudwatch-security-logs.png`
+- `docs/screenshots/terraform-apply-success.png`
+- `docs/screenshots/architecture.png`
+
+## Challenges & Lessons Learned
+
+- LLM application security needs controls outside the model prompt.
+- Input filtering catches known attack patterns but does not guarantee complete prompt injection prevention.
+- Output filtering is an important safety net when input controls miss a bypass.
+- Lambda dependency packaging must match the AWS Lambda runtime architecture.
+- Serverless LLM calls need timeout and rate-limit settings that account for model latency and cost control.
+
+## Relevance to Security Roles
+
+This project maps strongly to AI Security Engineer, Application Security Engineer, Cloud Security Engineer, and DevSecOps Engineer roles. It demonstrates prompt injection testing, LLM threat modeling, DLP design, serverless security, Terraform, and secure API gateway patterns.
+
+It is also relevant to product security work because it shows how AI features can be wrapped with controls before being exposed to users.
+
+## Future Improvements
+
+- Add authentication and authorization before the `/chat` endpoint.
+- Store secrets in AWS Secrets Manager instead of environment variables alone.
+- Add structured security logging for blocked prompts and redacted outputs.
+- Add automated tests for prompt injection and DLP cases.
+- Add allowlist-based prompt routing or a policy engine for more robust filtering.
+- Add CloudWatch metrics and alarms for blocked requests and throttling.
+- Move packaged third-party dependencies out of source control and document the build process.
+- Add a CI/CD workflow for Terraform validation and Python tests.
