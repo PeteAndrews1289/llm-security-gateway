@@ -23,28 +23,23 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# 2. Package the Python Code and Dependencies into a ZIP
-data "archive_file" "lambda_zip" {
-  type        = "zip"
-  source_dir  = "../lambda_firewall"
-  output_path = "lambda_function.zip"
-}
-
 # 3. The Serverless Proxy (AWS Lambda)
 resource "aws_lambda_function" "llm_firewall" {
-  filename         = data.archive_file.lambda_zip.output_path
+  filename         = "${path.module}/lambda_function.zip"
   function_name    = "llm_security_firewall"
   role             = aws_iam_role.lambda_exec.arn
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.10"
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  source_code_hash = filebase64sha256("${path.module}/lambda_function.zip")
   timeout          = 30 # LLMs can take a few seconds to respond
 
 
-  # Securely pass the API key into the Lambda environment
+  # Lab implementation: pass configured values to Lambda environment variables.
+  # A production design should retrieve secrets at runtime from a managed store.
   environment {
     variables = {
       OPENAI_API_KEY = var.openai_api_key
+      OPENAI_MODEL   = var.openai_model
     }
   }
 }
@@ -54,6 +49,11 @@ variable "openai_api_key" {
   description = "OpenAI API Key for the Lambda function"
   type        = string
   sensitive   = true
+}
+
+variable "openai_model" {
+  description = "Explicit model ID selected for the evaluated lab workload"
+  type        = string
 }
 
 # 4. The Chokepoint (AWS API Gateway)
