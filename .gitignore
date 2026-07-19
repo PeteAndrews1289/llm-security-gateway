@@ -8,16 +8,18 @@ __pycache__/
 *$py.class
 venv/
 env/
+.venv/
+build/
+dist/
 
 # Serverless/AWS Artifacts
 .serverless/
 .aws-sam/
 
 # OS Artifacts
-.DS_Store.terraform/
+.DS_Store
+.terraform/
 *.tfstate
+*.tfstate.*
 *.tfstate.backup
-.terraform.lock.hcl
 *.zip
-__pycache__/
-lambda_firewall/pydantic_core/

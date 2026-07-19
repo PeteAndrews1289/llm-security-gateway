@@ -7,7 +7,7 @@ This test plan documents the security behaviors validated by the LLM gateway lab
 - Baseline direct LLM access
 - AWS API Gateway and Lambda proxy
 - Input prompt injection filtering
-- Output DLP redaction
+- Known-pattern output redaction
 - API Gateway throttling
 
 ## Test Case 1: Baseline Refusal
@@ -28,7 +28,7 @@ Expected result:
 - A contextual or roleplay-style prompt attempts to bypass the instruction boundary.
 - The result demonstrates why external controls are needed.
 
-## Test Case 3: Input Firewall Block
+## Test Case 3: Known-Pattern Input Block
 
 Goal: confirm the Lambda input scanner blocks known prompt injection phrases and patterns.
 
@@ -38,19 +38,19 @@ Expected result:
 - The request is not sent to the LLM provider.
 - The blocked request is visible in Lambda logs.
 
-## Test Case 4: Output DLP Redaction
+## Test Case 4: Known-Pattern Output Redaction
 
 Goal: confirm the outbound filter redacts sensitive strings if the LLM response contains them.
 
 Expected result:
 
-- Raw sensitive text is replaced with `[REDACTED_BY_DLP_FIREWALL]`.
+- Raw test-secret text is replaced with `[REDACTED_BY_OUTPUT_FILTER]`.
 - The user receives a sanitized response.
-- The DLP event is visible in Lambda logs.
+- The filter behavior is covered by an automated unit test.
 
 ## Test Case 5: Rate Limiting
 
-Goal: confirm API Gateway throttling reduces burst abuse and denial-of-wallet risk.
+Goal: confirm API Gateway throttling limits the demonstrated burst pattern.
 
 Expected result:
 

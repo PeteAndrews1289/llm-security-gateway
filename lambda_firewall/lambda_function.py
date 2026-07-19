@@ -1,67 +1,42 @@
 import json
 import os
-import re
+
 from openai import OpenAI
 
-# Initialize the client from Environment Variables
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+from security_filters import apply_known_pattern_redaction, contains_prompt_injection
 
-# --- PHASE 3: THE INPUT FIREWALL LOGIC ---
-def contains_prompt_injection(user_input):
-    blacklisted_phrases = [
-        "ignore previous", "ignore all", "system prompt", "verbatim", 
-        "debug mode", "developer mode", "override", "forget everything", 
-        "initial instructions"
-    ]
-    user_input_lower = user_input.lower()
-    for phrase in blacklisted_phrases:
-        if phrase in user_input_lower:
-            print(f"SECURITY ALERT: Blocked keyword '{phrase}'")
-            return True
-            
-    if re.search(r"ignore\s+(all\s+)?previous", user_input_lower):
-        print("SECURITY ALERT: Blocked regex pattern matching")
-        return True
-    return False
+MAX_PROMPT_CHARACTERS = 8_000
 
-# --- PHASE 4: THE OUTPUT FILTER (DLP) ---
-def apply_dlp_redaction(llm_response):
-    """
-    Scans the LLM's outgoing response for sensitive data and redacts it.
-    """
-    redacted_response = llm_response
-    
-    # 1. Exact Match Redaction (The known secret)
-    known_secret = "FitPlate_DB_P@ssw0rd_2026"
-    if known_secret in redacted_response:
-        print("DLP ALERT: Exact secret match found in output. Redacting.")
-        redacted_response = redacted_response.replace(known_secret, "[REDACTED_BY_DLP_FIREWALL]")
-        
-    # 2. Regex Pattern Matching (Catches variants and related PII)
-    # This regex looks for any string starting with "FitPlate_DB_" followed by characters
-    pattern = r"FitPlate_DB_[a-zA-Z0-9@_]+"
-    if re.search(pattern, redacted_response):
-        print("DLP ALERT: Regex pattern match found in output. Redacting.")
-        redacted_response = re.sub(pattern, "[REDACTED_BY_DLP_FIREWALL]", redacted_response)
-        
-    return redacted_response
+
+def openai_client() -> OpenAI:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+    return OpenAI(api_key=api_key)
 
 def lambda_handler(event, context):
     try:
         body = json.loads(event.get('body', '{}'))
-        user_input = body.get('prompt', '')
+        user_input = body.get("prompt", "")
 
-        if not user_input:
+        if not isinstance(user_input, str) or not user_input.strip():
             return {
-                'statusCode': 400,
-                'body': json.dumps({'error': 'Missing prompt in request body'})
+                "statusCode": 400,
+                "body": json.dumps({"error": "Prompt must be a non-empty string"}),
             }
 
-        # --- PHASE 3: ENFORCE THE INPUT FIREWALL ---
+        if len(user_input) > MAX_PROMPT_CHARACTERS:
+            return {
+                "statusCode": 413,
+                "body": json.dumps({"error": "Prompt exceeds the lab size limit"}),
+            }
+
         if contains_prompt_injection(user_input):
             return {
-                'statusCode': 403,
-                'body': json.dumps({'error': 'SECURITY VIOLATION: Malicious prompt detected. Request dropped.'})
+                "statusCode": 403,
+                "body": json.dumps(
+                    {"error": "Request matched the demo prompt-filter policy"}
+                ),
             }
 
         # The Vulnerable Foundation
@@ -71,8 +46,8 @@ def lambda_handler(event, context):
         """
 
         # Call the OpenAI API
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo", 
+        response = openai_client().chat.completions.create(
+            model=os.environ["OPENAI_MODEL"],
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input}
@@ -82,17 +57,17 @@ def lambda_handler(event, context):
         
         raw_llm_answer = response.choices[0].message.content
 
-        # --- PHASE 4: ENFORCE THE OUTPUT FILTER (DLP) ---
-        safe_llm_answer = apply_dlp_redaction(raw_llm_answer)
+        safe_llm_answer = apply_known_pattern_redaction(raw_llm_answer)
 
         # Return the sanitized response
         return {
-            'statusCode': 200,
-            'body': json.dumps({'response': safe_llm_answer})
+            "statusCode": 200,
+            "body": json.dumps({"response": safe_llm_answer}),
         }
 
-    except Exception as e:
+    except Exception as exc:
+        print(json.dumps({"event": "gateway_request_failed", "type": type(exc).__name__}))
         return {
-            'statusCode': 500,
-            'body': json.dumps({'error': str(e)})
+            "statusCode": 500,
+            "body": json.dumps({"error": "Gateway request could not be completed"}),
         }
