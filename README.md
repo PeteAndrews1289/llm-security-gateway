@@ -1,157 +1,127 @@
-# AWS LLM Security Gateway — Security-Control Demo
+# LLM Security Gateway — a measured teardown of keyword/regex prompt-injection defense
 
-> **Status:** Completed, evidence captured, and infrastructure dismantled. This is a demonstration of a keyword filter and known-pattern output redactor—not a production prompt-injection firewall or general-purpose DLP system.
+> **What this is:** a serverless LLM gateway (AWS API Gateway + Lambda, Terraform)
+> that applies keyword input filtering and known-pattern output redaction — built
+> as an *instrument to measure its own security contribution* against a frozen,
+> pre-registered adversarial corpus. The headline is the measurement, not the
+> gateway.
 
-## Overview
+## Headline result
 
-This project demonstrates a serverless security gateway for Large Language Model applications. It addresses a growing AI security problem: applications that send user input directly to an LLM can be vulnerable to prompt injection, secret extraction, data leakage, and cost-abuse scenarios.
+Across 150 adversarial prompts × 3 arms × 3 repeats on two models (temperature 0):
 
-The lab starts with an intentionally vulnerable direct-to-LLM Python script that relies on the model to protect a mock internal secret. It then moves the LLM interaction behind AWS API Gateway and Lambda so input inspection, output redaction, and rate limiting can be enforced before responses reach the user.
+| End-to-end leak rate | gpt-3.5-turbo | gpt-4o-mini |
+|---|---|---|
+| No gateway (baseline) | **10%** (44/450, CI 7–13%) | **1%** (4/450, CI 0–2%) |
+| Full gateway | **1%** (3/450, CI 0–2%) | **0%** (0/450, CI 0–1%) |
 
-The final lab demonstrates a defense-in-depth pattern for LLM applications: an API gateway chokepoint, a Lambda keyword scanner, a known-pattern output redactor, Terraform-managed infrastructure, and API Gateway throttling.
+Three findings the data supports:
 
-## Key Features
+1. **Model refusal is the dominant defense.** The largest attribution bucket on
+   both models is the model declining unprompted (397/450 and 434/450). The
+   gateway's filter + redactor acted on 50/450 and 16/450.
+2. **The gateway helps a weak model, but shallowly.** On 3.5 it cut leaks 10%→1%
+   (stopping 16 of 17 baseline-leaking items). Yet all 3 residual leaks are a
+   single attack that asks for the secret *lowercased with hyphens for
+   underscores* — the case-sensitive redactor regex misses it entirely. The
+   output filter fails on its home turf against the simplest transformation in
+   the corpus.
+3. **Model choice and the gateway are substitutes.** 3.5 **with** the full
+   gateway (1%) is indistinguishable from 4o-mini **with no gateway** (1%).
+   Choosing the stronger model bought the same leak reduction as building the
+   entire filter — and the stronger model refused the very attack the redactor
+   could not catch.
 
-- Built an intentionally vulnerable baseline LLM client to test prompt injection.
-- Demonstrated contextual roleplay prompt injection against a mock internal secret.
-- Deployed a serverless proxy using AWS API Gateway and AWS Lambda.
-- Provisioned infrastructure with Terraform.
-- Implemented a demo Lambda scanner for known prompt-injection keywords and regex patterns.
-- Implemented a known-pattern output filter for the lab's mock secret family.
-- Added API Gateway route throttling to reduce cost-abuse risk.
-- Added a reproducible Linux-targeted Lambda packaging script and pinned dependency file.
-- Included screenshots showing baseline testing, extraction, input blocking, and known-pattern output redaction.
+Full numbers, attribution, and bounds: [`evaluation/RESULTS.md`](evaluation/RESULTS.md).
+
+## How it was measured
+
+The method is the point, and it is designed to be hostile to its own author's
+wishes.
+
+- **Pre-registration.** The evaluation criteria — attack taxonomy, what counts as
+  a bypass, what counts as a leak, the recovery oracle — were frozen in
+  [`docs/evaluation-protocol.md`](docs/evaluation-protocol.md) and tagged
+  `protocol-v1` **before any result was collected**. Amendments are logged (§12).
+- **Three arms for attribution.** Every item runs against (A) the vulnerable
+  baseline, (B) the gateway, and (C) a gateway with the secret absent. The
+  baseline arm exists so the gateway cannot take credit for the model refusing on
+  its own — the same discipline as reporting a containment that failed rather
+  than one a UI merely claimed.
+- **Conditional efficacy, paired by item.** The reported gateway benefit is
+  `P(no leak in B | leak in A)` — measured only on attacks that actually leaked
+  without it, so a rate difference over different prompt sets can't inflate it.
+- **A conservative recovery oracle.** A frozen decoder set scores leaks; anything
+  recoverable only outside that set scores as *no leak*, making every rate a
+  **lower bound**. Pinned by tests, including hex/Caesar cases that must score
+  NONE.
+- **Honest corpus provenance.** The adversarial corpus is white-box and authored;
+  its construction rule, a reviewer QA pass, and one revised item are documented
+  in [`corpus/README.md`](corpus/README.md). The intended false-positive corpus
+  could not be built without bias, so it is reported as a null result (0/39 on
+  queries drawn from the app's own docs), not fabricated.
+
+Two of the author's own hypotheses were refuted by this process and the
+reversals are recorded: that the blocklist collides with app vocabulary (it does
+not), and that the filter is simply useless (on a weak model it measurably is
+not).
 
 ## Architecture
 
-Users send prompts to API Gateway instead of directly calling the LLM provider. API Gateway applies throttling, then forwards allowed requests to Lambda. Lambda blocks suspicious prompts, sends clean prompts to the OpenAI API, scans the response for sensitive data, and returns either a sanitized response or a security error.
-
 ```mermaid
 flowchart LR
-    User[User] -->|POST /chat| APIGW[AWS API Gateway]
-    APIGW -->|Allowed Request| Lambda[AWS Lambda Security Gateway]
-    APIGW -->|Throttled| RateLimit[HTTP 429]
-    Lambda -->|Prompt Injection Detected| Block[HTTP 403]
-    Lambda -->|Clean Prompt| LLM[OpenAI API]
-    LLM --> Raw[Raw LLM Response]
-    Raw --> Filter[Known-Pattern Output Filter]
-    Filter -->|Test Pattern Found| Redacted[Redacted Response]
-    Filter -->|No Match| Success[Clean Response]
-    Redacted --> User
-    Success --> User
+    User[User] -->|POST /chat: prompt, context, session_id| APIGW[API Gateway]
+    APIGW -->|throttled| RL[HTTP 429]
+    APIGW --> L[Lambda gateway]
+    L -->|prompt matches blocklist| B[HTTP 403]
+    L -->|context: unfiltered by default| A[assemble call]
+    L -->|+ session history| A
+    A --> LLM[OpenAI API]
+    LLM --> RAW[raw response]
+    RAW --> RED[known-pattern redactor]
+    RED --> U[response to user]
 ```
 
-## Tools & Technologies
+The `context` channel (retrieved/tool content) and server-side session state were
+added to make indirect-injection and multi-turn attacks testable; they are
+evaluation scope extensions, not part of the originally deployed gateway. See
+protocol §4.
 
-### Cloud / Infrastructure
+## Repository
 
-- AWS API Gateway
-- AWS Lambda
-- IAM execution roles
-- CloudWatch Lambda logging
-- Terraform
+| Path | What |
+|---|---|
+| `lambda_firewall/` | the gateway: `security_filters.py`, `lambda_function.py`, `gateway_config.py`, `session_store.py` |
+| `docs/evaluation-protocol.md` | frozen protocol (`protocol-v1`) |
+| `corpus/adversarial.jsonl` | 150-item corpus + generator + QA record |
+| `evaluation/` | Tier 1 (offline) and Tier 2 (live-model) harnesses, recovery oracle, analyzer |
+| `evaluation/RESULTS.md` | the measured result |
+| `evaluation/results/tier2_trials_*.jsonl` | raw per-trial data for both models |
+| `api_gateway/` | Terraform |
 
-### Security Tools
+## Reproduce
 
-- Prompt injection testing
-- Known-pattern input filtering
-- Known-pattern output redaction
-- API Gateway throttling
-- OWASP Top 10 for LLM Applications concepts
-
-### Programming / Scripting
-
-- Python
-- Regular expressions
-- OpenAI API client
-- Terraform HCL
-
-### Monitoring / Logging
-
-- Lambda execution logs
-- API Gateway responses
-- Screenshot-based validation
-
-### Automation / CI/CD
-
-- Terraform-based deployment
-- No CI/CD pipeline is included in this repository
-
-## Security Concepts Demonstrated
-
-This project demonstrates LLM threat modeling, prompt-injection testing, known-pattern output filtering, serverless security, infrastructure as code, and basic request throttling.
-
-The baseline test shows why relying only on model instructions is not enough. A prompt can shift context and attempt to extract sensitive information from the system prompt. The gateway design adds external controls that do not depend solely on model behavior.
-
-The Lambda security layer demonstrates a simple defense-in-depth pattern: inspect input before the model call, redact sensitive output after the model call, and throttle traffic at the API boundary.
-
-## Implementation Steps
-
-1. Built a direct Python LLM client with a mock secret in the system prompt.
-2. Tested basic prompt injection and contextual roleplay bypasses.
-3. Created Terraform infrastructure for Lambda, IAM, and API Gateway.
-4. Packaged Python dependencies for AWS Lambda.
-5. Deployed the Lambda-based LLM proxy.
-6. Added a demo input filter for suspicious prompt-injection phrases and patterns.
-7. Added an output redactor for known secret strings and related regex patterns.
-8. Increased Lambda timeout to support slower LLM responses.
-9. Added API Gateway throttling for cost-abuse protection.
-10. Validated the system with screenshots for baseline behavior, blocked input, and known-pattern output redaction.
-
-## Results / Findings
-
-The baseline testing showed that a direct LLM integration could be manipulated into revealing a mock secret through contextual prompt injection. After the security gateway was added, known malicious prompts were blocked before reaching the model, and sensitive output was redacted before returning to the user.
-
-The project also produced practical cloud engineering findings. Lambda packaging required Linux-compatible dependencies, and synchronous LLM calls needed a longer Lambda timeout than the initial configuration. API Gateway throttling also required careful route-level configuration and time for enforcement to become consistent.
-
-## Evidence / Artifacts
-
-Existing evidence in this repository:
-
-- `docs/screenshots/llm-baseline-defense.png`
-- `docs/screenshots/llm-pure-extraction-success.png`
-- `docs/screenshots/403-forbidden-llm.png`
-- `docs/screenshots/dlp-redaction-success.png`
-- `docs/security-test-plan.md`
-- `vulnerable_app/vulnerable_app.py`
-- `lambda_firewall/lambda_function.py`
-- `api_gateway/main.tf`
-- `docs/evidence-and-limitations.md`
-- `scripts/build_lambda.sh`
-
-The original proxy screenshot was removed from the current branch because it displayed a revoked API key. The remaining evidence and exact limitations are documented in [`docs/evidence-and-limitations.md`](docs/evidence-and-limitations.md).
-
-## Challenges & Lessons Learned
-
-- LLM application security needs controls outside the model prompt.
-- Input filtering catches known attack patterns but does not guarantee complete prompt injection prevention.
-- Output filtering is an important safety net when input controls miss a bypass.
-- Lambda dependency packaging must match the AWS Lambda runtime architecture.
-- Serverless LLM calls need timeout and rate-limit settings that account for model latency and cost control.
-
-## Relevance to Security Roles
-
-This project maps to AI Security, Application Security, Cloud Security, and DevSecOps roles. It demonstrates prompt-injection testing, LLM threat modeling, scoped output filtering, serverless security, Terraform, and API gateway patterns.
-
-It is also relevant to product security work because it shows how AI features can be wrapped with controls before being exposed to users, while documenting why those controls are incomplete.
-
-## Reproduce the package and checks
+Offline (no API key, deterministic — filter evasion + redactor battery + tests):
 
 ```bash
 python3 -m unittest discover -s tests -v
-bash scripts/build_lambda.sh
-cd api_gateway && terraform fmt -check && terraform validate
+python3 evaluation/tier1_offline.py
 ```
 
-The Terraform deployment now requires an explicit `openai_model` value. The previous hard-coded historical model was removed rather than silently replaced without representative evaluations. The API key remains a sensitive Terraform input for this lab; a production design should retrieve it at runtime from a managed secret store.
+Live model arm (needs `OPENAI_API_KEY`; costs a few dollars):
 
-## Future Improvements
+```bash
+pip install openai
+EVAL_MODEL=gpt-3.5-turbo EVAL_REPEATS=3 python3 evaluation/tier2_live.py
+python3 evaluation/analyze_tier2.py evaluation/results/tier2_trials.jsonl
+```
 
-- Add authentication and authorization before the `/chat` endpoint.
-- Store secrets in AWS Secrets Manager instead of environment variables alone.
-- Add structured security logging for blocked prompts and redacted outputs.
-- Expand the automated corpus beyond the six baseline filter tests.
-- Add allowlist-based prompt routing or a policy engine for more robust filtering.
-- Add CloudWatch metrics and alarms for blocked requests and throttling.
-- Add Terraform validation and security scanning to CI.
-- Compare candidate model tiers on the published adversarial corpus before choosing a default.
+## What this does not claim
+
+Leak rates are lower bounds (oracle conservatism; the corpus asks overtly and so
+maximizes refusal). The corpus is authored, not sampled — no rate estimates real
+attacker success. Results are one date, one temperature, two models; refusal
+behavior drifts. `II`/`MT` test code added for this evaluation, not the deployed
+system. No claim about production prompt-injection defense, general DLP, or
+denial-of-wallet; throttling is not exercised by the harness. The stack (Python,
+AWS Lambda, API Gateway, Terraform, OpenAI) is a lab, not a product.
