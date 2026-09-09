@@ -117,3 +117,38 @@ applied, that it caught a real defect, and that the caught defect was corrected
 at the generator source rather than in the output file. The generator
 (`scripts/build_adversarial_corpus.py`) records each in-review revision inline,
 so the construction history is auditable rather than asserted.
+
+## Benign / false-positive: resolved as a null result
+
+The plan was a benign corpus yielding a false-positive rate. It could not be
+built honestly: the app's only user does not use the assistant feature (so any
+authored traffic is imagined), and the author of this harness knows the blocklist
+(so any prompts written here are contaminated toward or away from the trigger
+words). Neither source supports an unbiased rate.
+
+Instead, an unbiased proxy was tested: queries sourced mechanically from the
+application's own pre-existing documentation (`support.md` common tasks and the
+README feature list), transformed to question form by uniform templates, blind
+to the filter. Result:
+
+- **0 / 39 blocked** (95% CI 0%-9%).
+
+None of the app's own documented tasks or features trigger the input filter.
+
+### What this does and does not show
+
+- It **refutes** the project's initial hypothesis that the blocklist collides
+  with the application's domain vocabulary. It does not.
+- It does **not** prove the filter never false-positives. It tests help/support
+  phrasing. Coaching-style queries in which a blocklist word (`override`,
+  `ignore`) appears in a benign sense are plausible but cannot be sampled without
+  a real user population, so the false-positive rate is bounded (0%-9% on this
+  set), not pinned.
+- Net: the input filter is measurably **not disruptive** on realistic in-domain
+  traffic. Combined with its input-evasion rate and its attributable security
+  contribution (Tier 2), this supports describing it as a control that changes
+  little in either direction, rather than one that trades security for usability.
+
+The initial contaminated observation ("override my daily calorie goal" blocks)
+is retained only as an example of author contamination, not as evidence of a
+rate.
