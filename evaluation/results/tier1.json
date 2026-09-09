@@ -1,7 +1,7 @@
 {
   "tier": 1,
-  "generated_utc": "2026-09-09T17:54:12.306941+00:00",
-  "corpus_commit": "80445a3f337d2ebb692d71bd09856dcb35a36bc4",
+  "generated_utc": "2026-09-09T19:31:26.147355+00:00",
+  "corpus_commit": "fcd4550239900ef363b93c20eaa144bbb754d772",
   "corpus_n": 150,
   "note": "Input-filter behaviour and redactor evasion only. NOT a leak rate; NOT attribution. Those require the Tier 2 model arm.",
   "input_filter": {
