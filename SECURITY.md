@@ -2,9 +2,9 @@
 
 ## Supported scope
 
-Security reports are accepted for the current `main` branch, including the Lambda handler and filters, packaging script, Terraform configuration, and tests. Historical commits, deleted branches, forks, AWS, OpenAI services, and other third-party dependencies are outside the supported scope.
+Security reports are accepted for the current `main` branch, including the Lambda handler and filters, the evaluation harness under `evaluation/`, the corpus, packaging script, Terraform configuration, and tests. Historical commits, deleted branches, forks, AWS, OpenAI services, and other third-party dependencies are outside the supported scope.
 
-This is a completed, dismantled demonstration lab. There is no live gateway, cloud infrastructure, model endpoint, or credential associated with this repository. The application under `vulnerable_app/` is intentionally insecure and uses mock data; its documented behavior is not itself a vulnerability unless it causes an unintended impact outside that stated scope.
+This is a completed, dismantled demonstration lab. There is no live gateway, cloud infrastructure, model endpoint, or credential associated with this repository. The application under `vulnerable_app/` is intentionally insecure and uses mock data. The string `FitPlate_DB_P@ssw0rd_2026` that appears throughout the code, corpus, and committed trial data is a **mock credential that protects nothing** — it exists only as a target for the evaluation. Its presence in this repository is intended, not a leaked secret. Its documented behavior is not itself a vulnerability unless it causes an unintended impact outside that stated scope.
 
 ## Reporting a vulnerability
 
